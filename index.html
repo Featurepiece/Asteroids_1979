@@ -1,0 +1,1653 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asteroids 1979</title>
+<style>
+  :root { --fg: #e8eefc; --dim: #8a93a8; --panel: rgba(8, 10, 16, 0.94); --line: #2a3142; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; font: 15px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--fg); }
+  canvas { display: block; background: #000; }
+  .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; }
+  .hidden { display: none !important; }
+  #splash { background: #000; cursor: pointer; flex-direction: column; text-align: center; gap: 18px; }
+  #splash h1 { font-weight: 400; letter-spacing: 0.35em; margin: 0; font-size: clamp(26px, 6vw, 54px); }
+  #splash p { margin: 0; color: var(--dim); max-width: 34em; }
+  #splash .go { color: var(--fg); animation: blink 1.1s steps(2, start) infinite; }
+  @keyframes blink { to { visibility: hidden; } }
+  #paused { pointer-events: none; font-size: 22px; letter-spacing: 0.3em; }
+  .panel { background: var(--panel); border: 1px solid var(--line); padding: 22px 24px; max-width: 460px; width: 100%; max-height: 92vh; overflow: auto; }
+  .panel h2 { margin: 0 0 14px; font-weight: 400; letter-spacing: 0.2em; font-size: 17px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 10px 0; }
+  select, button, input[type=range] { font: inherit; color: var(--fg); background: #11151f; border: 1px solid var(--line); padding: 5px 8px; }
+  button { cursor: pointer; }
+  button:hover, select:hover { border-color: #4a5570; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+  .note { color: var(--dim); font-size: 13px; margin-top: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 10px; }
+  td { padding: 3px 0; vertical-align: top; }
+  td:first-child { color: var(--dim); padding-right: 14px; white-space: nowrap; }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+
+<div id="splash" class="overlay">
+  <h1>ASTEROIDS</h1>
+  <p>Atari, 1979. Ported to JavaScript from Ed Logg's original 6502 source.</p>
+  <p class="go">CLICK OR PRESS ANY KEY TO SWITCH ON</p>
+  <p>5 or C = coin &nbsp;·&nbsp; 1 / 2 = start &nbsp;·&nbsp; O = options</p>
+</div>
+
+<div id="paused" class="overlay hidden">PAUSED</div>
+
+<div id="options" class="overlay hidden">
+  <div class="panel">
+    <h2>OPTIONS</h2>
+    <div class="row"><label for="o-lang">Language</label>
+      <select id="o-lang" data-opt="lang"><option value="0">English</option><option value="1">Deutsch</option><option value="2">Français</option><option value="3">Español</option></select></div>
+    <div class="row"><label for="o-lives">Ships per game</label>
+      <select id="o-lives" data-opt="lives"><option value="3">3</option><option value="4">4</option></select></div>
+    <div class="row"><label for="o-coin">Coinage</label>
+      <select id="o-coin" data-opt="coinage"><option value="0">Free play</option><option value="1">1 coin 2 plays</option><option value="2">1 coin 1 play</option><option value="3">2 coins 1 play</option></select></div>
+    <div class="row"><label for="o-glow">Phosphor glow</label><input id="o-glow" type="checkbox" data-opt="glow"></div>
+    <div class="row"><label for="o-vol">Volume</label><input id="o-vol" type="range" min="0" max="1" step="0.05" data-opt="volume"></div>
+    <div class="btns">
+      <button id="opt-close">Close (O)</button>
+      <button id="opt-help">Controls</button>
+      <button id="opt-reset">Clear high scores</button>
+    </div>
+    <div id="help" class="hidden">
+      <table>
+        <tr><td>Rotate</td><td>← → or A D · D-pad / left stick</td></tr>
+        <tr><td>Thrust</td><td>↑ or W · B, RT, RB, D-pad up</td></tr>
+        <tr><td>Fire</td><td>Space, Ctrl or K · A, X</td></tr>
+        <tr><td>Hyperspace</td><td>↓, S, Shift or L · Y, LB, LT, D-pad down</td></tr>
+        <tr><td>Coin</td><td>5 or C · Back / Select</td></tr>
+        <tr><td>Start</td><td>1 (one player), 2 (two players) · Start, stick click for 2P</td></tr>
+        <tr><td>Initials</td><td>Rotate to pick a letter, hyperspace to accept</td></tr>
+        <tr><td>Other</td><td>P / Esc pause · M mute · O options</td></tr>
+      </table>
+    </div>
+    <p class="note">Ships per game applies from the next game. High scores are kept in this browser.</p>
+  </div>
+</div>
+
+<script>
+'use strict';
+// =====================================================================
+//  DATA - transcribed from ASTVEC (A35127.XX) and VECAN (VECAN.XX)
+//  Every shape is a list of vectors [dx, dy, z] exactly as written in
+//  the original VCTR / SVCTR macros: dx,dy in vector-generator units,
+//  z = beam intensity 0..15 (0 = invisible move).
+// =====================================================================
+
+const BRITE = 7;            // .BRITE  (normal brightness)
+const BRITR = BRITE + 5;    // .BRITR  (ship / saucer brightness = 12)
+
+// Helper: flat [dx,dy,z, dx,dy,z, ...] -> [[dx,dy,z], ...]
+function vecs(flat) {
+  const out = [];
+  for (let i = 0; i < flat.length; i += 3) out.push([flat[i], flat[i + 1], flat[i + 2]]);
+  return out;
+}
+
+const R = BRITR, R1 = BRITR - 1;
+
+// SHIP0..SHIP16: ship pointing at 0..90 degrees in 17 steps.
+// The game mirrors these for the other three quadrants (see SHPPIC).
+// Each has the ship picture, then (after an RTSL) the flame picture.
+const SHIPS = [
+  { body: vecs([-24,-16,0,  0,32,R,  -16,16,R1,  96,-32,R,  -96,-32,R,  16,16,R1]), flame: vecs([-32,16,R, 32,16,R]) },
+  { body: vecs([-22,-18,0,  -3,32,R, -17,14,R,   99,-22,R,  -92,-41,R,  14,17,R]),  flame: vecs([-33,13,R, 30,19,R]) },
+  { body: vecs([-20,-20,0,  -6,31,R, -19,13,R,  100,-13,R,  -88,-50,R,  13,19,R]),  flame: vecs([-35,9,R,  28,22,R]) },
+  { body: vecs([-18,-22,0,  -9,31,R, -20,11,R,  101,-3,R,   -83,-58,R,  11,20,R]),  flame: vecs([-35,6,R,  26,25,R]) },
+  { body: vecs([-16,-24,0, -12,30,R, -21,9,R,   101,7,R,    -76,-66,R,  9,21,R]),   flame: vecs([-36,3,R,  23,27,R]) },
+  { body: vecs([-14,-25,0, -15,28,R, -22,7,R,   100,17,R,   -70,-73,R,  7,22,R]),   flame: vecs([-36,-1,R, 21,29,R]) },
+  { body: vecs([-11,-27,0, -18,27,R, -22,4,R,    98,27,R,   -62,-80,R,  4,22,R]),   flame: vecs([-35,-4,R, 18,31,R]) },
+  { body: vecs([-8,-28,0,  -20,25,R, -23,2,R,    95,36,R,   -54,-86,R,  2,23,R]),   flame: vecs([-35,-8,R, 15,33,R]) },
+  { body: vecs([-6,-28,0,  -23,23,R, -23,0,R,    91,45,R,   -45,-91,R,  0,23,R]),   flame: vecs([-34,-11,R, 11,34,R]) },
+  { body: vecs([-3,-29,0,  -25,20,R, -23,-2,R,   86,54,R,   -36,-95,R, -2,23,R]),   flame: vecs([-33,-15,R, 8,35,R]) },
+  { body: vecs([0,-29,0,   -27,18,R, -22,-4,R,   80,62,R,   -27,-98,R, -4,22,R]),   flame: vecs([-31,-18,R, 4,35,R]) },
+  { body: vecs([3,-29,0,   -28,15,R, -22,-7,R,   73,70,R,  -17,-100,R, -7,22,R]),   flame: vecs([-29,-21,R, 1,36,R]) },
+  { body: vecs([6,-28,0,   -30,12,R, -21,-9,R,   66,76,R,   -7,-101,R, -9,21,R]),   flame: vecs([-27,-23,R, -3,36,R]) },
+  { body: vecs([8,-28,0,   -31,9,R,  -20,-11,R,  58,83,R,    3,-101,R, -11,20,R]),  flame: vecs([-25,-26,R, -6,35,R]) },
+  { body: vecs([11,-27,0,  -31,6,R,  -19,-13,R,  50,88,R,   13,-100,R, -13,19,R]),  flame: vecs([-22,-28,R, -9,35,R]) },
+  { body: vecs([14,-25,0,  -32,3,R,  -17,-14,R,  41,92,R,    22,-99,R, -14,17,R]),  flame: vecs([-19,-30,R, -13,33,R]) },
+  { body: vecs([16,-24,0,  -32,0,R,  -16,-16,R,  32,96,R,    32,-96,R, -16,16,R]),  flame: vecs([-16,-32,R, -16,32,R]) },
+];
+
+// SHIP17: small ship used to show lives remaining (ends with a move to the next slot)
+const SHIP17 = vecs([-16,-24,0, 32,0,BRITE, 16,-16,BRITE, -32,96,BRITE, -32,-96,BRITE, 16,16,BRITE, 80,24,0]);
+
+const B = BRITE, B1 = BRITE + 1, Bm = BRITE - 1;
+const ROCKS = [
+  vecs([0,16,0, 16,16,B, 16,-16,B, -8,-16,B, 8,-16,B, -24,-16,B1, -24,0,B1, -16,16,B, 0,32,B, 16,16,B, 16,-16,B]),
+  vecs([16,8,0, 16,8,B, -16,16,B, -16,-8,B, -16,8,B, -16,-16,B, 8,-16,B, -8,-16,B, 16,-16,B, 8,8,B, 24,-8,B1, 16,24,B1, -16,16,B]),
+  vecs([-16,0,0, -16,-8,B, 16,-24,B, 16,24,B, 0,-24,B, 16,0,B, 16,24,B, 0,16,B, -16,24,B, -24,0,B, -24,-24,B, 16,-8,B]),
+  vecs([8,0,0, 24,8,B, 0,8,Bm, -24,16,B, -24,0,B, 8,-16,Bm, -24,0,B, 0,-24,B, 16,-24,B, 24,8,B, 8,-8,Bm, 16,16,Bm, -24,16,B]),
+];
+
+const R2 = BRITR + 1;
+const SAUCER = vecs([-16,8,0, 32,0,R, 24,-16,0, -80,0,R2, 24,-16,R2, 32,0,R, 24,16,R2, -24,16,R2, -8,16,R, -16,0,R, -8,-16,R, -24,-16,R2]);
+
+// EXP16 and its 14/16, 12/16, 10/16 copies: ten dots around a centre.
+// (The source lists all four tables; each is EXP16 scaled by n/16, which
+//  gives exactly the integers written in the source.)
+const EXP16_MOVES = [[-16,0],[-16,-16],[16,-16],[24,8],[16,-8],[0,16],[8,24],[-8,24],[-32,-8],[-24,8]];
+function expPic(n) {
+  const out = [];
+  for (const [x, y] of EXP16_MOVES) { out.push([x * n / 16, y * n / 16, 0]); out.push([0, 0, BRITE]); }
+  return out;
+}
+const EXPPIC = [expPic(10), expPic(12), expPic(14), expPic(16)];
+
+// Ship explosion: six pieces and their drift directions
+const EXPSHP = [[-8,-12],[4,-8],[6,2],[-8,8],[-6,2],[4,-4]];
+const EXPDIR = [-40,30, 50,-20, 0,-60, 60,20, 10,70, -40,-40].map(v => v & 0xFF);
+
+// SINCOS: sine table, 0..64 (64 = 90 degrees)
+const SINCOS = [
+  0,3,6,9,12,16,19,22, 25,28,31,34,37,40,43,46,
+  49,51,54,57,60,63,65,68, 71,73,76,78,81,83,85,88,
+  90,92,94,96,98,100,102,104, 106,107,109,111,112,113,115,116,
+  117,118,120,121,122,122,123,124, 125,125,126,126,126,127,127,127,
+  127,
+];
+
+// ---------------------------------------------------------------------
+//  Character set (VECAN).  SVCTR x,y,z.
+// ---------------------------------------------------------------------
+const CH = {};
+CH[' '] = vecs([12,0,0]);
+CH.A = vecs([0,8,B, 4,4,B, 4,-4,B, 0,-8,B, -8,4,0, 8,0,B, 4,-4,0]);
+CH.B = vecs([0,12,B, 6,0,B, 2,-2,Bm, 0,-2,Bm, -2,-2,Bm, -6,0,B, 6,0,0, 2,-2,Bm, 0,-2,Bm, -2,-2,Bm, -6,0,B, 12,0,0]);
+CH.C = vecs([0,12,B, 8,0,B, -8,-12,0, 8,0,B, 4,0,0]);
+CH.D = vecs([0,12,B, 4,0,B, 4,-4,B, 0,-4,B, -4,-4,B, -4,0,B, 12,0,0]);
+CH.E = vecs([0,12,B, 8,0,B, -2,-6,0, -6,0,B, 0,-6,0, 8,0,B, 4,0,0]);
+CH.F = vecs([0,12,B, 8,0,B, -2,-6,0, -6,0,B, 0,-6,0, 12,0,0]);
+CH.G = vecs([0,12,B, 8,0,B, 0,-4,B, -4,-4,0, 4,0,B, 0,-4,B, -8,0,B, 12,0,0]);
+CH.H = vecs([0,12,B, 0,-6,0, 8,0,B, 0,6,0, 0,-12,B, 4,0,0]);
+CH.I = vecs([8,0,B, -4,0,0, 0,12,B, 4,0,0, -8,0,B, 12,-12,0]);
+CH.J = vecs([0,4,0, 4,-4,B, 4,0,B, 0,12,B, 4,-12,0]);
+CH.K = vecs([0,12,B, 6,0,0, -6,-6,B, 6,-6,B, 6,0,0]);
+CH.L = vecs([0,12,0, 0,-12,B, 8,0,B, 4,0,0]);
+CH.M = vecs([0,12,B, 4,-4,B, 4,4,B, 0,-12,B, 4,0,0]);
+CH.N = vecs([0,12,B, 8,-12,B, 0,12,B, 4,-12,0]);
+CH.O = vecs([0,12,B, 8,0,B, 0,-12,B, -8,0,B, 12,0,0]);
+CH.P = vecs([0,12,B, 8,0,B, 0,-6,B, -8,0,B, 6,-6,0, 6,0,0]);
+CH.Q = vecs([0,12,B, 8,0,B, 0,-8,B, -4,-4,B, -4,0,B, 4,4,0, 4,-4,B, 4,0,0]);
+CH.R = vecs([0,12,B, 8,0,B, 0,-6,B, -8,0,B, 2,0,0, 6,-6,B, 4,0,0]);
+CH.S = vecs([8,0,B, 0,6,B, -8,0,B, 0,6,B, 8,0,B, 4,-12,0]);
+CH.T = vecs([4,0,0, 0,12,B, -4,0,0, 8,0,B, 4,-12,0]);
+CH.U = vecs([0,12,0, 0,-12,B, 8,0,B, 0,12,B, 4,-12,0]);
+CH.V = vecs([0,12,0, 4,-12,B, 4,12,B, 4,-12,0]);
+CH.W = vecs([0,12,0, 0,-12,B, 4,4,B, 4,-4,B, 0,12,B, 4,-12,0]);
+CH.X = vecs([8,12,B, -8,0,0, 8,-12,B, 4,0,0]);
+CH.Y = vecs([4,0,0, 0,8,B, -4,4,B, 8,0,0, -4,-4,B, 8,-8,0]);
+CH.Z = vecs([0,12,0, 8,0,B, -8,-12,B, 8,0,B, 4,0,0]);
+CH['0'] = CH.O;
+CH['1'] = vecs([4,0,0, 0,12,B, 8,-12,0]);
+CH['2'] = vecs([0,12,0, 8,0,B, 0,-6,B, -8,0,B, 0,-6,B, 8,0,B, 4,0,0]);
+CH['3'] = vecs([8,0,B, 0,12,B, -8,0,B, 0,-6,0, 8,0,B, 4,-6,0]);
+CH['4'] = vecs([0,12,0, 0,-6,B, 8,0,B, 0,6,0, 0,-12,B, 4,0,0]);
+CH['5'] = vecs([8,0,B, 0,6,B, -8,0,B, 0,6,B, 8,0,B, 4,-12,0]);
+CH['6'] = vecs([0,6,0, 8,0,B, 0,-6,B, -8,0,B, 0,12,B, 12,-12,0]);
+CH['7'] = vecs([0,12,0, 8,0,B, 0,-12,B, 4,0,0]);
+CH['8'] = vecs([8,0,B, 0,12,B, -8,0,B, 0,-12,B, 0,6,0, 8,0,B, 4,-6,0]);
+CH['9'] = vecs([8,0,0, 0,12,B, -8,0,B, 0,-6,B, 8,0,B, 4,-6,0]);
+
+// VGMSGA: character table indexed 0=blank, 1..10 = 0..9, 11..36 = A..Z
+const VGMSGA = [' ', '0','1','2','3','4','5','6','7','8','9',
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'].map(c => CH[c]);
+
+// ---------------------------------------------------------------------
+//  Messages (ASTVEC L0 and ASTMSG L1..L3), positions from VGMSGS
+// ---------------------------------------------------------------------
+const MESSAGES = [
+  [ // L0 English
+    'HIGH SCORES', 'PLAYER ', 'YOUR SCORE IS ONE OF THE TEN BEST', 'PLEASE ENTER YOUR INITIALS',
+    'PUSH ROTATE TO SELECT LETTER', 'PUSH HYPERSPACE WHEN LETTER IS CORRECT', 'PUSH START',
+    'GAME OVER', '1 COIN 2 PLAYS', '1 COIN 1 PLAY', '2 COINS 1 PLAY'],
+  [ // L1 German
+    'HOECHSTERGEBNIS', 'SPIELER ', 'IHR ERGEBNIS IST EINES DER ZEHN BESTEN', 'BITTE GEBEN SIE IHRE INITIALEN EIN',
+    'ZUR BUCHSTABENWAHL ROTATE DRUECKEN', 'WENN BUCHSTABE OK HYPERSPACE DRUECKEN', 'STARTKNOEPFE DRUECKEN',
+    'SPIELENDE', '1 MUENZE 2 SPIELE', '1 MUENZE 1 SPIEL', '2 MUENZEN 1 SPIEL'],
+  [ // L2 French
+    'MEILLEUR SCORE', 'JOUER ', 'VOTRE SCORE EST UN DES 10 MEILLEURS', 'SVP ENTREZ VOS INITIALES',
+    'POUSSEZ ROTATE POUR VOS INITIALES', 'POUSSEZ HYPERSPACE QUAND LETTRE CORRECTE', 'APPUYER SUR START',
+    'FIN DE PARTIE', '1 PIECE 2 JOUEURS', '1 PIECE 1 JOUEUR', '2 PIECES 1 JOUEUR'],
+  [ // L3 Spanish
+    'RECORDS', 'JUGADOR ', 'SU PUNTAJE ESTA ENTRE LOS DIEZ MEJORES', 'POR FAVOR ENTRE SUS INICIALES',
+    'OPRIMA ROTATE PARA SELECCIONAR LA LETRA', 'OPRIMA HYPERSPACE', 'PULSAR START',
+    'JUEGO TERMINADO', '1 FICHA 2 JUEGOS', '1 FICHA 1 JUEGO', '2 FICHAS 1 JUEGO'],
+];
+// VGMSGS: (x/4, y/4) start position of each message
+const VGMSGS = [[400,728],[400,728],[50,680],[50,648],[50,616],[50,584],[400,792],[400,628],[320,228],[320,228],[320,228]]
+  .map(([x, y]) => [x >> 2, y >> 2]);
+// ASTMSG: LABS 380,128 at size 0, "ASTEROIDS BY ATARI"
+const ASTMSG_TEXT = 'ASTEROIDS BY ATARI';
+
+// =====================================================================
+//  GAME LOGIC - a routine-by-routine port of ASTROD (A35131.1A),
+//  ASTMSG (A35131.1B), the NMI tone code (A35131.1D) and the parts of
+//  VECUT (A35131.1C) the game uses.
+//
+//  The original RAM layout is kept: zero page is a 256-byte array with
+//  the same variable order, and the two player pages (2 and 3) are
+//  swapped by the "bank select" bit just like the real board does.
+//  Arithmetic is done on bytes with the same carries and wrap-arounds,
+//  so the game behaves the way the 6502 code does, quirks included.
+// =====================================================================
+
+const NOBJ = 27;               // ASTDEC: rocks 0..26, then:
+const SHIP = NOBJ;             //   ship
+const SAUC = NOBJ + 1;         //   saucer, then 2 saucer torpedoes, then 4 ship torpedoes
+
+// ---- Zero page (same order as the .BLKB declarations in ASTROD) ----
+const VGSIZE = 0x00, VGBRIT = 0x01, XCOMP = 0x04, TEMP1 = 0x08, TEMP2 = 0x0A, TEMP3 = 0x0C, TEMP4 = 0x14,
+  PLAYR = 0x17, PLAYR2 = 0x18, LPLAYR = 0x19, NPLAYR = 0x1B, HSCORE = 0x1C, UPDINT = 0x30, UPDFLG = 0x31,
+  INITL = 0x33, SCORE = 0x51, NHITS = 0x55, HITS = 0x56, RENTRY = 0x58, GDELAY = 0x59, SYNC = 0x5A,
+  FRAME = 0x5B, INTCT = 0x5D, POLYL = 0x5E, POLYH = 0x5F, ANGLE = 0x60, LASTSW = 0x62, XINCL = 0x63,
+  YINCL = 0x64, SND1 = 0x65, SND2 = 0x66, SND3 = 0x67, LEXPSND = 0x68, LSND1 = 0x69, LSND2 = 0x6A,
+  LTHUMP = 0x6B, THUMP1 = 0x6C, THUMP2 = 0x6D, LOUT1 = 0x6E, CRDT = 0x6F, CMODE = 0x70,
+  SHIPX = 0x7C, SHIPY = 0x88;
+
+// ---- Player page (page 2, or page 3 when bank-switched) ----
+const OBJ = 0, XINC = 35, YINC = 70, OBJXH = 105, OBJYH = 140, OBJXL = 175, OBJYL = 210,
+  SROCKS = 245, NROCKS = 246, EDELAY = 247, SEDLAY = 248, RTIMER = 249, SDELAY = 250,
+  RDELAY = 251, THUMP3 = 252, DIFCTY = 253;
+
+function createMachine(io) {
+  // io = { sw: {fire,hyp,thrust,rotl,rotr,start1,start2}, opt: {lang,lives,coinage}, snd: {} }
+  const zp = new Uint8Array(256);
+  const phys = [new Uint8Array(256), new Uint8Array(256)];
+  let pg = phys[0], pg3 = phys[1];     // logical page 2 and page 3 (pg3 = "...+100")
+  const snd = io.snd;
+  const sw = io.sw;
+  const V = io.V;                      // display list builder (vector generator)
+
+  const bankSync = () => { const b = (zp[LOUT1] >> 2) & 1; pg = phys[b]; pg3 = phys[b ^ 1]; };
+  const SW = v => (v ? 0x80 : 0);      // switches read as D7 = 1 when on
+
+  // ------------------------------------------------------------------
+  //  Small 6502 helpers
+  // ------------------------------------------------------------------
+  const COMP = a => (-a) & 0xFF;                       // two's complement
+  const ASR = a => ((a & 0x80) | (a >> 1));            // CMP I,80 / ROR
+  const sgnext = a => (a & 0x80 ? 0xFF : 0);
+  function adcBCD(a, b, c) {                           // 6502 decimal-mode ADC
+    let lo = (a & 15) + (b & 15) + c, hi = (a >> 4) + (b >> 4);
+    if (lo > 9) { lo -= 10; hi++; }
+    let co = 0;
+    if (hi > 9) { hi -= 10; co = 1; }
+    return [((hi << 4) | lo) & 0xFF, co];
+  }
+
+  // ------------------------------------------------------------------
+  //  Vector-list helpers (VECUT)
+  // ------------------------------------------------------------------
+  const scaleOf = () => { const n = zp[VGSIZE] >> 4; return n >= 8 ? n - 16 : n; };
+  function VGSABS(x4, y4) { V.labs(x4 * 4, y4 * 4, scaleOf()); }   // short form LABS
+  function VGLABS(x, y) { V.labs(x, y, scaleOf()); }
+  function VGHEX(d) { V.shape(VGMSGA[(d & 15) + 1]); }             // display a digit
+  function VGCHAR(i) { V.shape(VGMSGA[i]); }                         // (Y)=index, as character number
+
+  // ------------------------------------------------------------------
+  //  RAND - random number generator (16-bit shift register)
+  // ------------------------------------------------------------------
+  function RAND() {
+    let lo = zp[POLYL], hi = zp[POLYH];
+    const c = lo >> 7;
+    lo = (lo << 1) & 0xFF;
+    hi = ((hi << 1) | c) & 0xFF;
+    if (hi & 0x80) lo = (lo + 1) & 0xFF;
+    if (lo & 2) lo ^= 1;                  // change bit 0 depending on bit 1
+    if ((lo | hi) === 0) lo = (lo + 1) & 0xFF;   // beware the 0 case
+    zp[POLYL] = lo; zp[POLYH] = hi;
+    return lo;
+  }
+
+  // ------------------------------------------------------------------
+  //  SIN / COS / ATAN
+  // ------------------------------------------------------------------
+  function SIN1(a) { if (a >= 0x41) a = ((a ^ 0x7F) + 1) & 0xFF; return SINCOS[a]; }
+  function SIN(a) { a &= 0xFF; return (a & 0x80) ? COMP(SIN1(a & 0x7F)) : SIN1(a); }
+  function COS(a) { return SIN((a + 0x40) & 0xFF); }
+
+  function DIVIDE(a, d, cin) {           // 4-bit result divide
+    let t = 0, c = cin;
+    for (let i = 0; i < 4; i++) {
+      let nc = t >> 7; t = ((t << 1) | c) & 0xFF; c = nc;
+      nc = a >> 7; a = ((a << 1) | c) & 0xFF; c = nc;
+      if (a >= d) { a = (a - d) & 0xFF; c = 1; } else c = 0;
+    }
+    t = ((t << 1) | c) & 0xFF;
+    return t & 0x0F;
+  }
+  const ATANA = [0, 2, 5, 7, 10, 12, 15, 17, 19, 21, 23, 25, 26, 28, 29, 31];
+  function ATAN3(a, d, cin) { return ATANA[DIVIDE(a, d, cin)]; }
+  function ATAN2(x, y) {                 // x >= 0, y >= 0
+    if (y === x) return 0x20;
+    if (y < x) return ATAN3(y, x, 0);
+    return COMP((ATAN3(x, y, 1) - 0x40) & 0xFF);   // 40-ARCTAN(X/Y)
+  }
+  function ATAN1(x, y) {
+    if (x & 0x80) return COMP(ATAN2(COMP(x), y) ^ 0x80);   // falls through into COMP
+    return ATAN2(x, y);
+  }
+  function ATAN(x, y) {                  // arctan(y/x), 0..FF, 40 = 90 degrees
+    if (y & 0x80) return COMP(ATAN1(x, COMP(y)));
+    return ATAN1(x, y);
+  }
+
+  // ------------------------------------------------------------------
+  //  POINTS - add points to score (decimal), extra life every 10,000
+  // ------------------------------------------------------------------
+  function POINTS(x, a, c) {
+    let r = adcBCD(zp[SCORE + x], a, c);
+    zp[SCORE + x] = r[0];
+    if (!r[1]) return;
+    r = adcBCD(zp[SCORE + x + 1], 0, 1);
+    zp[SCORE + x + 1] = r[0];
+    if ((r[0] & 0x0F) === 0) {           // every 1000 (x10) give a new life
+      zp[SND3] = 0xB0;                   // set off tone
+      zp[HITS + zp[PLAYR]]++;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  //  INIT / INIT1 / NEWSHP / RSAUCR
+  // ------------------------------------------------------------------
+  function INIT() {
+    pg[SROCKS] = 2;                       // starting number of rocks - 2
+    zp[NHITS] = io.opt.lives === 4 ? 4 : 3;
+    for (let x = 4; x >= 0; x--) {
+      pg[OBJ + NOBJ + x] = 0;
+      pg[OBJ + NOBJ + 4 + x] = 0;
+      zp[SCORE - 1 + x] = 0;              // (also clears the last initial of 10th place, as the original does)
+    }
+    pg[NROCKS] = 0;
+  }
+  function INIT1() {
+    snd.EXPSND = 0; snd.THUMP = 0; snd.SCRSND = 0; snd.SCRFIR = 0;
+    snd.SHPSND = 0; snd.SHPFIR = 0; snd.TONE = 0;
+    zp[LEXPSND] = 0; zp[SND1] = 0; zp[SND2] = 0; zp[SND3] = 0;
+  }
+  function NEWSHP() {
+    pg[OBJXL + SHIP] = 0; pg[OBJYL + SHIP] = 0;
+    pg[XINC + SHIP] = 0; pg[YINC + SHIP] = 0;
+    pg[OBJXH + SHIP] = 0x10; pg[OBJYH + SHIP] = 0x0C;   // middle of the screen
+  }
+  function RSAUCR() {
+    pg[EDELAY] = pg[SEDLAY];
+    pg[OBJ + SAUC] = 0; pg[XINC + SAUC] = 0; pg[YINC + SAUC] = 0;
+  }
+
+  // ------------------------------------------------------------------
+  //  NEWVEL / NEWVE1 - new random velocity based on an old one
+  // ------------------------------------------------------------------
+  function NEWVE1(a) {
+    if (a & 0x80) {
+      if (a < 0xE1) a = 0xE1;            // -1F
+      if (a >= 0xFB) return 0xFA;        // not too close to zero: -6
+      return a;
+    }
+    if (a < 6) a = 6;
+    if (a >= 0x20) a = 0x1F;
+    return a;
+  }
+  function NEWVEL(x, y) {
+    let r = RAND() & 0x8F; if (r & 0x80) r |= 0xF0;
+    pg[XINC + x] = NEWVE1((r + pg[XINC + y]) & 0xFF);
+    RAND(); RAND(); RAND();
+    r = RAND() & 0x8F; if (r & 0x80) r |= 0xF0;
+    pg[YINC + x] = NEWVE1((r + pg[YINC + y]) & 0xFF);
+  }
+
+  // ------------------------------------------------------------------
+  //  NEWAST - start a new wave of asteroids
+  // ------------------------------------------------------------------
+  function NEWAST() {
+    let x = NOBJ - 1;
+    if (pg[RDELAY] === 0) {
+      if (pg[OBJ + SAUC]) return;         // not while saucer is there
+      pg[XINC + SAUC] = 0; pg[YINC + SAUC] = 0;
+      pg[DIFCTY]++;
+      if (pg[DIFCTY] >= 11) pg[DIFCTY]--;
+      let a = pg[SROCKS] + 2;
+      if (a >= 11) a = 11;                // leave one open picture
+      pg[NROCKS] = a; pg[SROCKS] = a;
+      let n = a;
+      const y = NOBJ + 1;
+      do {
+        pg[OBJ + x] = (RAND() & 0x18) | 0x04;   // random picture, large
+        NEWVEL(x, y);
+        const r = RAND();
+        let v = (r >> 1) & 0x1F;
+        if (r & 1) {                      // start on Y axis
+          if (v >= 0x18) v &= 0x17;
+          pg[OBJYH + x] = v; pg[OBJXH + x] = 0; pg[OBJXL + x] = 0;
+        } else {                          // start on X axis
+          pg[OBJXH + x] = v; pg[OBJYH + x] = 0; pg[OBJYL + x] = 0;
+        }
+        x--;
+      } while (--n);
+      pg[EDELAY] = 0x7F;                  // saucer should wait
+      pg[THUMP3] = 0x30;                  // reset thump sound
+    }
+    for (; x >= 0; x--) pg[OBJ + x] = 0;  // clear rest of objects
+  }
+
+  // ------------------------------------------------------------------
+  //  CHKST - check for start / end of game
+  // ------------------------------------------------------------------
+  function CHKST2() { VGMSG(1); VGHEX(zp[PLAYR] + 1); }
+
+  function CHKST() {
+    if (zp[NPLAYR]) {
+      if (zp[GDELAY]) { zp[GDELAY]--; CHKST2(); return false; }
+      return CHKST1();
+    }
+    if (!((zp[UPDFLG] & zp[UPDFLG + 1]) & 0x80)) return false;   // updating initials
+    if ((zp[CMODE] & 3) === 0) zp[CRDT] = 2;                       // free play
+    else VGMSG((zp[CMODE] & 3) + 7);                               // game cost message
+    // "ASTEROIDS BY ATARI"
+    V.labs(380, 128, 0);
+    for (const ch of ASTMSG_TEXT) V.shape(CH[ch]);
+    const credits = zp[CRDT];
+    if (!credits) return false;
+    let x = 1;
+    if (!sw.start1) {
+      if (credits < 2 || !sw.start2) {
+        // 40$: flash PUSH START
+        if (!(zp[FRAME] & 0x20)) VGMSG(6);
+        return false;
+      }
+      // two player start: set up player 2's page
+      zp[LOUT1] |= 0x04; bankSync();
+      INIT(); NEWAST(); NEWSHP();
+      zp[HITS + 1] = zp[NHITS];
+      x = 2;
+      zp[CRDT]--;
+    }
+    zp[NPLAYR] = x;
+    zp[CRDT]--;
+    zp[LOUT1] = (zp[LOUT1] & 0xF8) ^ zp[NPLAYR]; bankSync();
+    NEWSHP();
+    pg[SDELAY] = 1; pg3[SDELAY] = 1;
+    pg[SEDLAY] = 0x92; pg3[SEDLAY] = 0x92;      // enough for 3 large saucers
+    pg3[EDELAY] = 0x92; pg[EDELAY] = 0x92;
+    pg[RDELAY] = 0x7F; pg3[RDELAY] = 0x7F;
+    pg[DIFCTY] = 5; pg3[DIFCTY] = 5;
+    zp[UPDFLG] = 0xFF; zp[UPDFLG + 1] = 0xFF;
+    zp[GDELAY] = 0x80;
+    zp[PLAYR] = 0; zp[PLAYR2] = 0;
+    zp[HITS] = zp[NHITS];
+    zp[LTHUMP] = 4; zp[THUMP2] = 4;
+    pg[THUMP3] = 0x30; pg3[THUMP3] = 0x30;
+    return true;
+  }
+
+  function CHKST1() {
+    if ((zp[FRAME] & 0x3F) === 0 && pg[THUMP3] !== 8) pg[THUMP3]--;   // thump speeds up
+    if (zp[HITS + zp[PLAYR]] === 0) {
+      if (!(pg[OBJ + NOBJ + 4] | pg[OBJ + NOBJ + 5] | pg[OBJ + NOBJ + 6] | pg[OBJ + NOBJ + 7])) {
+        VGMSG(7);                                 // GAME OVER
+        if (zp[NPLAYR] >= 2) CHKST2();
+      }
+    }
+    if (pg[OBJ + SHIP]) return false;            // ship alive or exploding
+    if (pg[SDELAY] !== 0x80) return false;
+    pg[SDELAY] = 0x10;                           // delay before entering ship
+    let x = zp[NPLAYR];
+    if ((zp[HITS] | zp[HITS + 1]) === 0) {       // game is all over
+      zp[LPLAYR] = x;
+      zp[NPLAYR] = 0xFF;                         // flag to update high scores
+      INIT1();
+      zp[LOUT1] |= 0x03;
+      return false;
+    }
+    RSAUCR();
+    if (--x === 0) return false;                 // one player
+    zp[GDELAY] = 0x80;
+    x = zp[PLAYR] ^ 1;
+    if (zp[HITS + x] === 0) return false;
+    zp[PLAYR] = x;
+    zp[LOUT1] ^= 0x04; bankSync();               // switch to other player's page
+    zp[PLAYR2] = x << 1;
+    return false;
+  }
+
+  // ------------------------------------------------------------------
+  //  COLIDE - collision detector
+  // ------------------------------------------------------------------
+  function COLIDE() {
+    let x = 7;
+    while (x >= 0) {
+      const o = pg[OBJ + NOBJ + x];
+      if (o === 0 || (o & 0x80)) { x--; continue; }
+      let y = NOBJ + 1;
+      if (x < 4) { y--; if (x === 0) y--; }      // skip saucer-saucer, ship-ship
+      let hit = false;
+      for (; y >= 0; y--) {
+        const oy = pg[OBJ + y];
+        if (oy === 0 || (oy & 0x80)) continue;
+        // X distance /2
+        let lo = pg[OBJXL + y] - pg[OBJXL + NOBJ + x];
+        let borrow = lo < 0 ? 1 : 0; lo &= 0xFF;
+        let hi = (pg[OBJXH + y] - pg[OBJXH + NOBJ + x] - borrow) & 0xFF;
+        let dx = ((hi & 1) << 7) | (lo >> 1);
+        hi &= 0xFE;
+        if (hi !== 0) { if (hi !== 0xFE) continue; dx ^= 0xFF; }
+        // Y distance /2
+        lo = pg[OBJYL + y] - pg[OBJYL + NOBJ + x];
+        borrow = lo < 0 ? 1 : 0; lo &= 0xFF;
+        hi = (pg[OBJYH + y] - pg[OBJYH + NOBJ + x] - borrow) & 0xFF;
+        let dy = ((hi & 1) << 7) | (lo >> 1);
+        hi &= 0xFE;
+        if (hi !== 0) { if (hi !== 0xFE) continue; dy ^= 0xFF; }
+        // size of target
+        let r = (oy & 1) ? 42 : (oy & 2) ? 72 : 132;
+        if (x === 0) r += 28;                      // the ship
+        else if (x === 1) {                        // the saucer
+          r += 19;
+          if (pg[OBJ + SAUC] !== 1) r += 18;
+        }
+        if (r < dx || r < dy) continue;
+        const r15 = (r + (r >> 1)) & 0xFF;         // 3/2 distance
+        const sum = dx + dy;
+        if (sum > 0xFF || sum >= r15) continue;    // chop off corners
+        x = DSTRCT(x, y);
+        hit = true;
+        break;
+      }
+      x--;
+      void hit;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  //  CPYPOS / SEARCH / SPLIT - break a rock into fragments
+  // ------------------------------------------------------------------
+  function CPYPOS(x, y) {
+    pg[OBJ + x] = (pg[OBJ + y] & 0x07) | (RAND() & 0x18);
+    pg[OBJXL + x] = pg[OBJXL + y]; pg[OBJXH + x] = pg[OBJXH + y];
+    pg[OBJYL + x] = pg[OBJYL + y]; pg[OBJYH + x] = pg[OBJYH + y];
+    pg[XINC + x] = pg[XINC + y]; pg[YINC + x] = pg[YINC + y];
+  }
+  function SEARC1(x) { for (; x >= 0; x--) if (pg[OBJ + x] === 0) return x; return -1; }
+  function SEARCH() { return SEARC1(NOBJ - 1); }
+
+  const SPLIT_PTS = [0x10, 0x05, 0x02];   // small, medium, large (x10 when shown)
+  function SPLIT(y, shooter) {
+    pg[RTIMER] = 0x50;
+    const pic = pg[OBJ + y] & 0x78;
+    const sz = (pg[OBJ + y] & 0x07) >> 1;
+    pg[OBJ + y] = sz ? (sz | pic) : 0;
+    if (zp[NPLAYR] && (shooter === 0 || shooter >= 4))    // no points if saucer does it
+      POINTS(zp[PLAYR2], SPLIT_PTS[sz], 0);
+    if (pg[OBJ + y] === 0) return;
+    let x = SEARCH();
+    if (x < 0) return;
+    pg[NROCKS]++;
+    CPYPOS(x, y); NEWVEL(x, y);
+    pg[OBJXL + x] ^= ((pg[XINC + x] & 0x1F) << 1) & 0xFF;   // prevent overlapping rocks
+    x = SEARC1(x);
+    if (x < 0) return;
+    pg[NROCKS]++;
+    CPYPOS(x, y); NEWVEL(x, y);
+    pg[OBJYL + x] ^= ((pg[YINC + x] & 0x1F) << 1) & 0xFF;
+  }
+
+  // ------------------------------------------------------------------
+  //  DSTRCT - destruction during collision.  Returns the new X.
+  // ------------------------------------------------------------------
+  function DSTRCT(x, y) {
+    const explode = () => {                 // 70$
+      const v = (pg[OBJ + y] & 3) ^ 2;
+      zp[LEXPSND] = (((v >> 1) << 7) | ((v & 1) << 6)) | 0x3F;   // LSR/ROR/ROR: pitch in D7-D6
+      pg[OBJ + y] = 0xA0;                   // timer for explosion
+      pg[XINC + y] = 0; pg[YINC + y] = 0;
+      return x;
+    };
+    const saucerHit = () => {               // 80$
+      pg[EDELAY] = pg[SEDLAY];
+      if (zp[NPLAYR] === 0) return explode();
+      const small = pg[OBJ + SAUC] & 1;
+      POINTS(zp[PLAYR2], small ? 0x99 : 0x20, small);   // 1000 or 200
+      return explode();
+    };
+    if (x === 1) {
+      if (y === NOBJ) { x = 0; y = NOBJ + 1; }          // ship hit saucer
+      else {                                             // saucer hit rock
+        pg[OBJ + NOBJ + x] = 0xA0; pg[XINC + NOBJ + x] = 0; pg[YINC + NOBJ + x] = 0;
+        SPLIT(y, x); return explode();
+      }
+    }
+    if (x === 0) {                          // ship hit something
+      pg[SDELAY] = 0x81;
+      zp[HITS + zp[PLAYR]]--;
+      pg[OBJ + NOBJ] = 0xA0; pg[XINC + NOBJ] = 0; pg[YINC + NOBJ] = 0;
+      if (y < NOBJ) { SPLIT(y, x); return explode(); }
+      return saucerHit();
+    }
+    pg[OBJ + NOBJ + x] = 0;                 // clear torpedo
+    if (y === NOBJ) {                       // torpedo hit ship
+      zp[HITS + zp[PLAYR]]--;
+      pg[SDELAY] = 0x81;
+      return explode();
+    }
+    if (y > NOBJ) return saucerHit();       // torpedo hit saucer
+    SPLIT(y, x);
+    return explode();
+  }
+
+  // ------------------------------------------------------------------
+  //  ENEMY / EFIRE - the flying saucer
+  // ------------------------------------------------------------------
+  function ENEMY() {
+    if (zp[FRAME] & 3) return;               // every fourth frame
+    const s = pg[OBJ + SAUC];
+    if (s & 0x80) return;                    // exploding
+    if (s) return EFIRE();
+    if (zp[NPLAYR]) {
+      const sh = pg[OBJ + SHIP];
+      if (sh === 0 || (sh & 0x80)) return;   // you are not visible
+    }
+    if (pg[RTIMER]) pg[RTIMER]--;
+    if (--pg[EDELAY] !== 0) return;          // no time yet
+    pg[EDELAY] = 18;
+    if (pg[RTIMER]) {
+      if (pg[NROCKS] === 0) return;
+      if (pg[NROCKS] >= pg[DIFCTY]) return;  // too many rocks
+    }
+    const a = (pg[SEDLAY] - 6) & 0xFF;
+    if (a >= 0x20) pg[SEDLAY] = a;
+    pg[OBJXL + SAUC] = 0; pg[OBJXH + SAUC] = 0;
+    let r = RAND();
+    for (let i = 0; i < 3; i++) {            // 3 bits into Y LSB
+      pg[OBJYL + SAUC] = ((r & 1) << 7) | (pg[OBJYL + SAUC] >> 1);
+      r >>= 1;
+    }
+    if (r >= 0x18) r &= 0x17;
+    pg[OBJYH + SAUC] = r;                    // starting vertical position
+    let xv = 0x10;
+    if (!(zp[POLYH] & 0x40)) {               // start on right side
+      pg[OBJXH + SAUC] = 0x1F; pg[OBJXL + SAUC] = 0xFF; xv = 0xF0;
+    }
+    pg[XINC + SAUC] = xv;
+    let size = 2;                            // large
+    if (!(pg[SEDLAY] & 0x80)) {
+      if (zp[SCORE + zp[PLAYR2] + 1] >= 0x30) size = 1;   // keep small saucer
+      else {
+        const t = RAND();
+        if ((pg[SEDLAY] >> 1) < t) size = 1;
+      }
+    }
+    pg[OBJ + SAUC] = size;
+  }
+
+  const SAUCER_VY = [0xF0, 0, 0, 0x10];
+  function EFIRE() {
+    if (((zp[FRAME] << 1) & 0xFF) === 0) pg[YINC + SAUC] = SAUCER_VY[RAND() & 3];   // change direction
+    if (zp[NPLAYR] && pg[SDELAY]) return;    // don't fire if you are dead
+    if (--pg[EDELAY] !== 0) return;
+    pg[EDELAY] = 10;
+    let ang;
+    if (pg[OBJ + SAUC] >> 1) ang = RAND();   // large saucer: random direction
+    else {                                   // small saucer: aim at ship
+      let t = ASR(pg[XINC + SAUC]);
+      let lo = pg[OBJXL + SHIP] - pg[OBJXL + SAUC], b = lo < 0 ? 1 : 0; lo &= 0xFF;
+      let hi = (pg[OBJXH + SHIP] - pg[OBJXH + SAUC] - b) & 0xFF;
+      const X = ((((hi << 2) | (lo >> 6)) & 0xFF) - t) & 0xFF;
+      t = ASR(pg[YINC + SAUC]);
+      lo = pg[OBJYL + SHIP] - pg[OBJYL + SAUC]; b = lo < 0 ? 1 : 0; lo &= 0xFF;
+      hi = (pg[OBJYH + SHIP] - pg[OBJYH + SAUC] - b) & 0xFF;
+      const Y = ((((hi << 2) | (lo >> 6)) & 0xFF) - t) & 0xFF;
+      zp[ANGLE + 1] = ATAN(X, Y);
+      let r = RAND();
+      const lim = zp[SCORE + zp[PLAYR2] + 1] >= 0x35 ? 1 : 0;   // "real good" after 35,000
+      r &= [0x8F, 0x87][lim];
+      if (r & 0x80) r |= [0x70, 0x78][lim];
+      ang = (r + zp[ANGLE + 1] + lim) & 0xFF;                   // don't be too good - just close
+    }
+    zp[ANGLE + 1] = ang;
+    FIRE1(3, 1, 1);
+  }
+
+  // ------------------------------------------------------------------
+  //  FIRE - fire ship's torpedoes
+  // ------------------------------------------------------------------
+  function FIRE() {
+    if (!zp[NPLAYR]) return;
+    zp[LASTSW] = SW(sw.fire) | (zp[LASTSW] >> 1);      // ASL FIRESW / ROR LASTSW
+    if (!(zp[LASTSW] & 0x80)) return;                  // not on
+    if (zp[LASTSW] & 0x40) return;                     // not off before
+    if (pg[SDELAY]) return;                            // ship not visible yet
+    FIRE1(7, 0, 3);
+  }
+  function FIRE1(y, x, stop) {
+    for (; y !== stop; y--) if (pg[OBJ + NOBJ + y] === 0) return FIRE3(y, x);
+  }
+  function FIRE3(y, x) {
+    pg[OBJ + NOBJ + y] = 0x12;                         // length of life
+    const cx = ASR(COS(zp[ANGLE + x]));
+    let a = (cx + pg[XINC + NOBJ + x]) & 0xFF;
+    if (a & 0x80) { if (a < 0x91) a = 0x91; } else if (a >= 0x70) a = 0x6F;
+    pg[XINC + NOBJ + y] = a;
+    const cy = ASR(SIN(zp[ANGLE + x]));
+    a = (cy + pg[YINC + NOBJ + x]) & 0xFF;
+    if (a & 0x80) { if (a < 0x91) a = 0x91; } else if (a >= 0x70) a = 0x6F;
+    pg[YINC + NOBJ + y] = a;
+    // start at the nose: position + 3/2 * (cos/2)
+    let off = (ASR(cx) + cx) & 0xFF;
+    let lo = off + pg[OBJXL + NOBJ + x];
+    pg[OBJXL + NOBJ + y] = lo & 0xFF;
+    pg[OBJXH + NOBJ + y] = (sgnext(cx) + pg[OBJXH + NOBJ + x] + (lo >> 8)) & 0xFF;
+    off = (ASR(cy) + cy) & 0xFF;
+    lo = off + pg[OBJYL + NOBJ + x];
+    pg[OBJYL + NOBJ + y] = lo & 0xFF;
+    pg[OBJYH + NOBJ + y] = (sgnext(cy) + pg[OBJYH + NOBJ + x] + (lo >> 8)) & 0xFF;
+    zp[SND1 + x] = 0x80;                               // start fire sound
+  }
+
+  // ------------------------------------------------------------------
+  //  HYPER - hyperspace
+  // ------------------------------------------------------------------
+  function HYPER() {
+    if (!zp[NPLAYR]) return;
+    if (pg[OBJ + SHIP] & 0x80) return;
+    if (pg[SDELAY]) return;
+    if (!sw.hyp) return;
+    pg[OBJ + SHIP] = 0; pg[XINC + SHIP] = 0; pg[YINC + SHIP] = 0;
+    pg[SDELAY] = 0x30;
+    let a = RAND() & 0x1F;
+    if (a >= 0x1D) a = 0x1C;
+    if (a < 3) a = 3;
+    pg[OBJXH + SHIP] = a;
+    for (let i = 0; i < 5; i++) a = RAND();
+    a &= 0x1F;
+    let flag = 1;
+    if (a >= 0x18) {
+      a = ((a & 7) << 1) + 4;              // 4 to 18
+      if (a >= pg[NROCKS]) flag = 0x80;    // flag for destruct on re-entry
+    }
+    if (a >= 0x15) a = 0x14;
+    if (a < 3) a = 3;
+    pg[OBJYH + SHIP] = a;
+    zp[RENTRY] = flag;
+  }
+
+  // ------------------------------------------------------------------
+  //  MOVE - rotate / thrust / friction / re-entry
+  // ------------------------------------------------------------------
+  function MOVE2(hi, lo) {
+    if (hi & 0x80) { if (hi < 0xC1) return [0xC0, 0x01]; return [hi, lo]; }
+    if (hi >= 0x40) return [0x3F, 0xFF];
+    return [hi, lo];
+  }
+  function NEARBY() {
+    for (let x = NOBJ + 1; x >= 0; x--) {
+      if (pg[OBJ + x] === 0) continue;
+      const dx = (pg[OBJXH + x] - pg[OBJXH + SHIP]) & 0xFF;
+      if (dx >= 4 && dx < 0xFC) continue;
+      const dy = (pg[OBJYH + x] - pg[OBJYH + SHIP]) & 0xFF;
+      if (dy < 4 || dy >= 0xFC) { pg[SDELAY]++; return true; }
+    }
+    return false;
+  }
+  function MOVE() {
+    if (!zp[NPLAYR]) return;
+    if (pg[OBJ + SHIP] & 0x80) return;
+    if (pg[SDELAY]) {
+      if (--pg[SDELAY]) return;
+      const y = zp[RENTRY];
+      if (y & 0x80) {                         // blow up on re-entry
+        pg[OBJ + SHIP] = 0xA0;
+        zp[LEXPSND] = 0x3E;
+        zp[HITS + zp[PLAYR]]--;
+        pg[SDELAY] = 0x81;
+      } else if (y) {
+        pg[OBJ + SHIP] = 1;                   // returning from hyperspace
+      } else if (!NEARBY()) {
+        if (pg[OBJ + SAUC]) { pg[SDELAY] = 2; return; }
+        pg[OBJ + SHIP] = 1;
+      }
+      zp[RENTRY] = 0;
+      return;
+    }
+    if (sw.rotl) zp[ANGLE] += 3;
+    else if (sw.rotr) zp[ANGLE] -= 3;
+    if (zp[FRAME] & 1) return;                // every other frame check thrust
+    if (sw.thrust) {
+      snd.SHPSND = 0x80;
+      let c = COS(zp[ANGLE]);
+      let lo = ((c << 1) & 0xFF) + zp[XINCL];
+      let hi = (sgnext(c) + pg[XINC + SHIP] + (lo >> 8)) & 0xFF;
+      let r = MOVE2(hi, lo & 0xFF);
+      pg[XINC + SHIP] = r[0]; zp[XINCL] = r[1];
+      c = SIN(zp[ANGLE]);
+      lo = ((c << 1) & 0xFF) + zp[YINCL];
+      hi = (sgnext(c) + pg[YINC + SHIP] + (lo >> 8)) & 0xFF;
+      r = MOVE2(hi, lo & 0xFF);
+      pg[YINC + SHIP] = r[0]; zp[YINCL] = r[1];
+      return;
+    }
+    snd.SHPSND = 0;
+    const friction = (INC, INCL) => {
+      if ((pg[INC + SHIP] | zp[INCL]) === 0) return;
+      let a = ((pg[INC + SHIP] << 1) & 0xFF) ^ 0xFF, x, c;
+      if (a & 0x80) { x = 0xFF; c = 0; } else { x = 0; c = 1; }
+      const lo = a + zp[INCL] + c;
+      zp[INCL] = lo & 0xFF;
+      pg[INC + SHIP] = (x + pg[INC + SHIP] + (lo >> 8)) & 0xFF;
+    };
+    friction(XINC, XINCL);
+    friction(YINC, YINCL);
+  }
+
+  // ------------------------------------------------------------------
+  //  MOTION - move everything and draw it
+  // ------------------------------------------------------------------
+  function MOTION() {
+    for (let x = NOBJ + 7; x >= 0; x--) {
+      const o = pg[OBJ + x];
+      if (o === 0) continue;
+      if (o & 0x80) {                         // exploding
+        let a, c;
+        if (x === NOBJ) { a = 0; c = zp[FRAME] & 1; }        // ship: 1 every other frame
+        else { a = COMP(o) >> 4; c = 1; }
+        const n = (a + o + c) & 0xFF;
+        if (n & 0x80) {
+          pg[OBJ + x] = n;
+          const scale = x === NOBJ ? 0 : ((n & 0xF0) + 0x10) & 0xFF;
+          PICTUR(x, scale, pg[OBJXL + x], pg[OBJXH + x], pg[OBJYL + x], pg[OBJYH + x]);
+          continue;
+        }
+        if (x === NOBJ) NEWSHP();
+        else if (x > NOBJ) pg[EDELAY] = pg[SEDLAY];
+        else if (--pg[NROCKS] === 0) pg[RDELAY] = 0x7F;
+        pg[OBJ + x] = 0;
+        continue;
+      }
+      // X position (0..1023, wraps)
+      let lo = pg[XINC + x] + pg[OBJXL + x];
+      pg[OBJXL + x] = lo & 0xFF;
+      let hi = (sgnext(pg[XINC + x]) + pg[OBJXH + x] + (lo >> 8)) & 0xFF;
+      if (hi >= 0x20) {
+        hi &= 0x1F;
+        if (x === NOBJ + 1) { RSAUCR(); continue; }   // saucer leaves the screen
+      }
+      pg[OBJXH + x] = hi;
+      // Y position (0..767, wraps)
+      lo = pg[YINC + x] + pg[OBJYL + x];
+      pg[OBJYL + x] = lo & 0xFF;
+      hi = (sgnext(pg[YINC + x]) + pg[OBJYH + x] + (lo >> 8)) & 0xFF;
+      if (hi >= 0x18) hi = (hi === 0x18) ? 0 : 0x17;
+      pg[OBJYH + x] = hi;
+      const scale = (o & 1) ? 0xE0 : (o & 2) ? 0xF0 : 0;   // 1/4, 1/2, full size
+      PICTUR(x, scale, pg[OBJXL + x], pg[OBJXH + x], pg[OBJYL + x], pg[OBJYH + x]);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  //  PICTUR - display object picture
+  // ------------------------------------------------------------------
+  function PICTUR(x, scale, xl, xh, yl, yh) {
+    zp[VGSIZE] = scale;
+    const px = ((xh << 8) | xl) >> 3;
+    const py = ((((yh + 4) & 0xFF) << 8) | yl) >> 3;   // range is 128..895
+    VGLABS(px, py);
+    const o = pg[OBJ + x];
+    if (o & 0x80) {
+      if (x === NOBJ) return SHPEXP();
+      return V.shape(EXPPIC[(o & 0x0C) >> 2]);
+    }
+    if (x === NOBJ) return SHPPIC();
+    if (x === NOBJ + 1) return V.shape(SAUCER);
+    if (x > NOBJ + 1) {                      // torpedo: a dot
+      V.dot(15);
+      if ((zp[FRAME] & 3) === 0) pg[OBJ + x]--;   // decrement active count
+      return;
+    }
+    V.shape(ROCKS[(o & 0x18) >> 3]);
+  }
+
+  // ------------------------------------------------------------------
+  //  SHPPIC - ship picture (17 drawings mirrored into 4 quadrants)
+  // ------------------------------------------------------------------
+  function SHPPIC() {
+    let a = zp[ANGLE], mx = 1, my = 1;
+    if (a & 0x80) { my = -1; a = (0 - a) & 0xFF; }       // Y = -Y
+    if ((a & 0x80) || (a & 0x40)) { mx = -1; a = (0x80 - a) & 0xFF; }   // X = -X
+    const pic = SHIPS[(a >> 1) >> 1];
+    V.shape(pic.body, 0, mx, my);
+    if (sw.thrust && (zp[FRAME] & 4)) V.shape(pic.flame, 0, mx, my);   // flicker at 15 Hz
+  }
+
+  // ------------------------------------------------------------------
+  //  SHPEXP - exploding ship pieces
+  // ------------------------------------------------------------------
+  function SHPEXP() {
+    const o = pg[OBJ + SHIP];
+    if (o < 0xA2) {                          // first explosion frames: init piece positions
+      for (let x = 10; x >= 0; x -= 2) {
+        zp[SHIPX + x + 1] = (((EXPDIR[x] >> 4) + 0xF8) & 0xFF) ^ 0xF8;
+        zp[SHIPY + x + 1] = (((EXPDIR[x + 1] >> 4) + 0xF8) & 0xFF) ^ 0xF8;
+      }
+    }
+    for (let x = ((o ^ 0xFF) & 0x70) >> 3; x >= 0; x -= 2) {
+      const ex = EXPDIR[x], ey = EXPDIR[x + 1];
+      let lo = ex + zp[SHIPX + x]; zp[SHIPX + x] = lo & 0xFF;
+      zp[SHIPX + x + 1] = (sgnext(ex) + zp[SHIPX + x + 1] + (lo >> 8)) & 0xFF;
+      lo = ey + zp[SHIPY + x]; zp[SHIPY + x] = lo & 0xFF;
+      zp[SHIPY + x + 1] = (sgnext(ey) + zp[SHIPY + x + 1] + (lo >> 8)) & 0xFF;
+      const s16 = (h, l) => { const v = (h << 8) | l; return v & 0x8000 ? v - 0x10000 : v; };
+      const dx = s16(sgnext(ex), zp[SHIPX + x + 1]);
+      const dy = s16(sgnext(ey), zp[SHIPY + x + 1]);
+      const p = EXPSHP[x >> 1];
+      V.vec(dx, dy, zp[VGBRIT] >> 4);        // VGBRIT is 0: an invisible move
+      V.vec(p[0], p[1], BRITR);              // the piece
+      V.vec(-p[0], -p[1], 0);
+      V.vec(-dx, -dy, 0);                    // back to the middle
+    }
+  }
+
+  // ------------------------------------------------------------------
+  //  Text and numbers
+  // ------------------------------------------------------------------
+  function VGMSG(n) {
+    zp[VGSIZE] = 0x10;                       // all messages are medium size
+    const p = VGMSGS[n];
+    VGSABS(p[0], p[1]);
+    const lang = io.opt.lang & 3;
+    for (const ch of MESSAGES[lang][n]) V.shape(CH[ch]);
+  }
+
+  function HEX(d) {                          // digit, with intensity change from TEMP4+2
+    V.shape(VGMSGA[(d & 15) + 1], zp[TEMP4 + 2] >> 4);
+  }
+  function HEXZ(d, c) {                      // digit with zero suppression; returns carry
+    d &= 15;
+    if (c && d === 0) { VGCHAR(0); return 1; }
+    HEX(d);
+    return 0;
+  }
+  function DIGITS(addr, n, c, inten) {       // display 2n BCD digits from zero page
+    zp[TEMP4 + 2] = inten;
+    let cnt = n - 1, p = addr + n - 1;
+    for (;;) {
+      c = HEXZ(zp[p] >> 4, c);
+      if (cnt === 0) c = 0;                  // display last digit (even 0)
+      c = HEXZ(zp[p] & 15, c);
+      p--; cnt--;
+      if (cnt < 0) return c;
+    }
+  }
+
+  function INITAL(y) {                       // display an initial (or underline)
+    const c = zp[INITL + y];
+    if (c) return VGCHAR(c);
+    if ((zp[UPDFLG] & zp[UPDFLG + 1]) & 0x80) return VGCHAR(0);
+    V.vec(8, 0, 7);                          // underline
+    V.vec(4, 0, 0);
+  }
+
+  function LIVES(x4, n) {
+    if (!n) return;
+    zp[VGSIZE] = 0xE0;                       // 1/4 size picture
+    VGSABS(x4, 852 >> 2);
+    for (let i = 0; i < n; i++) V.shape(SHIP17);
+  }
+
+  // ------------------------------------------------------------------
+  //  PARAMS - scores, lives, high score
+  // ------------------------------------------------------------------
+  function scoreFlash(isUp) {                // returns [show, intensityChange]
+    if (!isUp) return [true, 0];
+    if ((pg[OBJ + SHIP] | zp[RENTRY]) || (pg[SDELAY] & 0x80)) return [true, 0x20];
+    return [!!(zp[FRAME] & 0x10), 0x20];
+  }
+  function PARAMS() {
+    zp[VGSIZE] = 0x10;
+    VGSABS(0, 0);
+    VGSABS(100 >> 2, 876 >> 2);
+    let [show, inten] = scoreFlash(zp[NPLAYR] === 2 && zp[PLAYR] === 0);
+    if (show) { DIGITS(SCORE, 2, 1, inten); HEX(0); }
+    LIVES(160 >> 2, zp[HITS]);
+    zp[VGSIZE] = 0;                          // small characters
+    VGSABS(480 >> 2, 876 >> 2);
+    DIGITS(HSCORE, 2, 1, 0);
+    VGHEX(0);
+    zp[VGSIZE] = 0x10;
+    VGSABS(768 >> 2, 876 >> 2);
+    zp[TEMP4 + 2] = 0;
+    const np = zp[NPLAYR];
+    if (np === 1) return;                    // no player 2 in 1 player game
+    [show, inten] = scoreFlash(np !== 0 && zp[PLAYR] !== 0);
+    if (show) { DIGITS(SCORE + 2, 2, 1, inten); HEX(0); }
+    LIVES(828 >> 2, zp[HITS + 1]);
+  }
+
+  // ------------------------------------------------------------------
+  //  SCORES - high score table (attract mode)
+  // ------------------------------------------------------------------
+  function SCORES() {
+    if (zp[NPLAYR]) return false;
+    if (zp[FRAME + 1] & 4) return false;     // not time to display table
+    if ((zp[HSCORE] | zp[HSCORE + 1]) === 0) return false;
+    VGMSG(0);
+    zp[VGSIZE] = 0x10;
+    let ypos = 668 >> 2, ini = 0;
+    for (let x = 0; x < 20; x += 2) {
+      if ((zp[HSCORE + x] | zp[HSCORE + x + 1]) === 0) break;
+      VGSABS(380 >> 2, ypos);
+      zp[TEMP3] = adcBCD(x >> 1, 1, 0)[0];   // place number 1..10
+      DIGITS(TEMP3, 1, 1, 0);
+      V.dot(4);                              // a period
+      VGCHAR(0);
+      DIGITS(HSCORE + x, 2, 1, 0);
+      VGHEX(0);
+      VGCHAR(0);
+      INITAL(ini); INITAL(ini + 1); INITAL(ini + 2);
+      ini += 3;
+      ypos = (ypos - 8) & 0xFF;
+    }
+    return true;
+  }
+
+  // ------------------------------------------------------------------
+  //  UPDATE / GETINT - high score table and initials entry
+  // ------------------------------------------------------------------
+  function UPDATE() {
+    if (!(zp[NPLAYR] & 0x80)) return;
+    zp[FRAME + 1] = 0xFF;
+    zp[UPDFLG] = 0xFF; zp[UPDFLG + 1] = 0xFF;
+    for (let X = 2; X >= 0; X -= 2) {
+      for (let Y = 0; Y < 20; Y += 2) {
+        const hs = zp[HSCORE + Y] | (zp[HSCORE + Y + 1] << 8);
+        const sc = zp[SCORE + X] | (zp[SCORE + X + 1] << 8);
+        if (hs >= sc) continue;
+        // new high score: make room
+        const idx = (Y >> 1) + Y;            // index into initials table
+        zp[UPDFLG + (X >> 1)] = idx;
+        let xi = 27, yi = 18;
+        while (xi !== idx) {
+          zp[INITL + xi] = zp[INITL + xi - 3]; zp[INITL + xi + 1] = zp[INITL + xi - 2]; zp[INITL + xi + 2] = zp[INITL + xi - 1];
+          zp[HSCORE + yi] = zp[HSCORE + yi - 2]; zp[HSCORE + yi + 1] = zp[HSCORE + yi - 1];
+          yi -= 2; xi -= 3;
+          if (xi === 0) break;
+        }
+        zp[INITL + xi] = 11;                 // start letters at A
+        zp[INITL + xi + 1] = 0; zp[INITL + xi + 2] = 0;
+        zp[FRAME + 1] = 0xF0;                // timeout for getting initials
+        zp[HSCORE + Y + 1] = zp[SCORE + X + 1];
+        zp[HSCORE + Y] = zp[SCORE + X];
+        break;
+      }
+    }
+    if (!(zp[UPDFLG + 1] & 0x80) && zp[UPDFLG + 1] >= zp[UPDFLG]) {
+      let a = zp[UPDFLG + 1] + 3;            // player 1 moved player 2 down a place
+      if (a >= 30) a = 0xFF;
+      zp[UPDFLG + 1] = a;
+    }
+    zp[NPLAYR] = 0;
+    zp[UPDINT] = 0;
+  }
+
+  function GETINT() {                        // returns true while entering initials
+    if ((zp[UPDFLG] & zp[UPDFLG + 1]) & 0x80) return false;
+    if (zp[LPLAYR] >> 1) {                   // last game was 2 player
+      VGMSG(1);
+      const y = (zp[UPDFLG + 1] & 0x80) ? 1 : 2;
+      zp[PLAYR] = y;
+      if (!(zp[FRAME] & 0x10)) VGHEX(y);
+    }
+    VGMSG(2); VGMSG(3); VGMSG(4); VGMSG(5);
+    zp[VGSIZE] = 0x20;                       // larger characters for initials
+    VGSABS(400 >> 2, 228 >> 2);
+    zp[PLAYR] >>= 1;
+    const p = zp[PLAYR];
+    const base = zp[UPDFLG + p];
+    let cur = (base + zp[UPDINT]) & 0xFF;
+    INITAL(base); INITAL(base + 1); INITAL(base + 2);
+    // hyperspace accepts the letter (debounced)
+    zp[LASTSW] = ((zp[LASTSW] << 1) | (sw.hyp ? 1 : 0)) & 0xFF;
+    if ((zp[LASTSW] & 0x1F) === 0x07) {
+      zp[UPDINT]++;
+      if (zp[UPDINT] >= 3) {
+        zp[UPDFLG + p] = 0xFF;
+        zp[UPDINT] = 0;
+        zp[FRAME + 1] = 1;                   // bring up high score table next
+        return true;                         // (returns with N clear, so this frame still counts as updating)
+      }
+      cur = (cur + 1) & 0xFF;
+      zp[FRAME + 1] = 0xF0;
+      zp[INITL + cur] = 11;
+    }
+    if (zp[FRAME + 1] === 0) { zp[UPDFLG] = 0xFF; zp[UPDFLG + 1] = 0xFF; return true; }   // timeout
+    if ((zp[FRAME] & 7) === 0) {
+      let d = 0;
+      if (sw.rotl) d = 1; else if (sw.rotr) d = 0xFF;
+      if (d) {
+        let v = (d + zp[INITL + cur]) & 0xFF;
+        if (v & 0x80) v = 36;                // before blank is Z
+        else if (v < 11) v = (v === 1) ? 11 : 0;
+        if (v >= 37) v = 0;
+        zp[INITL + cur] = v;
+      }
+    }
+    return true;
+  }
+
+  // ------------------------------------------------------------------
+  //  SOUNDS
+  // ------------------------------------------------------------------
+  function SOUND1(x) {
+    let on;
+    if (zp[LSND1 + x] & 0x80) {
+      const s = zp[SND1 + x];
+      if (s === 0 || (s & 0x80)) on = false;   // must start a new one
+      else on = (--zp[SND1 + x]) !== 0;
+    } else if (zp[SND1 + x] & 0x80) { zp[SND1 + x] = 0x10; on = true; }
+    else on = false;
+    zp[LSND1 + x] = on ? 0x80 : 0;
+    return zp[LSND1 + x];
+  }
+  function SOUNDS() {
+    if (!zp[NPLAYR]) return;                  // attract mode is silent
+    const s = pg[OBJ + SAUC];
+    let on = 0;
+    if (s && !(s & 0x80)) { snd.SCRSEL = s === 2 ? 0x80 : 0; on = 0x80; }
+    snd.SCRSND = on;
+    snd.SCRFIR = SOUND1(1);
+    snd.SHPFIR = SOUND1(0);
+    if (pg[OBJ + SHIP] !== 1) snd.SHPSND = 0;
+    let thumpOff = true;
+    const ship = pg[OBJ + SHIP];
+    if (pg[NROCKS] && !(ship & 0x80) && (ship | zp[RENTRY])) {
+      thumpOff = false;
+      if (zp[THUMP1]) { if (--zp[THUMP1] === 0) thumpOff = true; }
+      else if (--zp[THUMP2] === 0) {
+        zp[THUMP1] = 4;                       // frames for sound to be on
+        zp[LTHUMP] ^= 0x14;                   // turn on and change tone
+        snd.THUMP = zp[LTHUMP];
+      }
+    }
+    if (thumpOff) {
+      zp[LTHUMP] &= 0x0F;
+      snd.THUMP = zp[LTHUMP];
+      zp[THUMP2] = pg[THUMP3];
+    }
+    let l = zp[LEXPSND];
+    if (l & 0x3F) l--;
+    zp[LEXPSND] = l;
+    snd.EXPSND = l;
+  }
+
+  // ------------------------------------------------------------------
+  //  START / main loop pass (one 16 ms frame)
+  // ------------------------------------------------------------------
+  function START() { INIT1(); INIT(); NEWAST(); }
+
+  function powerOn() {                        // PWRON
+    zp.fill(0); phys[0].fill(0); phys[1].fill(0);
+    zp[UPDFLG] = 0xB0; zp[UPDFLG + 1] = 0xB0; // not getting initials
+    zp[LOUT1] = 0x03; bankSync();
+    setCoinMode();
+    if (io.loadHighScores) io.loadHighScores(zp, HSCORE, INITL);
+    START();
+  }
+  function setCoinMode() { zp[CMODE] = io.opt.coinage & 3; }
+
+  // coin inserted (the COIN65 routine, simplified to the three coin modes)
+  let halfCoin = 0;
+  function coin() {
+    const m = zp[CMODE] & 3;
+    if (m === 0) return;
+    let add = 0;
+    if (m === 1) add = 2;
+    else if (m === 2) add = 1;
+    else { halfCoin ^= 1; if (!halfCoin) add = 1; }
+    zp[CRDT] = Math.min(255, zp[CRDT] + add);
+  }
+
+  function frame() {
+    // NMI tone for the extra-life beeps (4 NMIs per frame)
+    if (zp[FRAME] & 1) zp[SND3] = Math.max(0, zp[SND3] - 4);
+    zp[FRAME]++; if (zp[FRAME] === 0) zp[FRAME + 1]++;
+    V.begin();
+    if (CHKST()) { START(); V.abort(); return; }
+    UPDATE();
+    if (!GETINT()) {
+      if (!SCORES()) {
+        if (!zp[GDELAY]) { FIRE(); HYPER(); MOVE(); ENEMY(); }
+        MOTION();
+        COLIDE();
+      }
+    }
+    PARAMS();
+    SOUNDS();
+    RAND();                                   // keep random numbers coming
+    V.end();
+    const a = pg[RDELAY];
+    if (a) pg[RDELAY]--;
+    if ((a | pg[NROCKS]) === 0) NEWAST();     // start new set of asteroids
+    snd.TONE = (zp[SND3] && (zp[FRAME] & 4)) ? 0x80 : 0;
+  }
+
+  return {
+    powerOn, frame, coin, setCoinMode,
+    get zp() { return zp; }, get pg() { return pg; }, phys,
+    debug: { RAND, SIN, COS, ATAN, NOBJ, consts: { HSCORE, INITL, NPLAYR, CRDT, HITS, SCORE, FRAME, OBJ, NROCKS, SDELAY } },
+  };
+}
+
+// =====================================================================
+//  SOUND - the Asteroids board makes its sounds with analogue circuits
+//  that the program only switches on and off (see ASTDEC: EXPSND,
+//  THUMP, SCRSND, SCRFIR, SCRSEL, SHPSND, SHPFIR, TONE).  This is a
+//  sample-by-sample recreation driven by those same register values.
+//  Frequencies, sweeps, decay times and mix levels follow MAME's
+//  discrete model of the board (asteroid_a.cpp, K. Wilkins).  The
+//  thump pitches are my own estimate from the circuit values, so they
+//  are approximate.
+//  This function is also stringified into an AudioWorklet, so it must
+//  stay self-contained.
+// =====================================================================
+function makeSynth(sr) {
+  const regs = { EXPSND: 0, THUMP: 0, SCRSND: 0, SCRSEL: 0, SCRFIR: 0, SHPSND: 0, SHPFIR: 0, TONE: 0 };
+  const TAU = Math.PI * 2;
+  const onePole = fc => { const a = 1 - Math.exp(-TAU * fc / sr); let y = 0; return x => (y += a * (x - y)); };
+  function bandpass(fc, q) {                 // RBJ biquad, constant 0 dB peak gain
+    const w = TAU * fc / sr, al = Math.sin(w) / (2 * q), a0 = 1 + al;
+    const b0 = al / a0, b2 = -al / a0, a1 = -2 * Math.cos(w) / a0, a2 = (1 - al) / a0;
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    return x => { const y = b0 * x + b2 * x2 - a1 * y1 - a2 * y2; x2 = x1; x1 = x; y2 = y1; y1 = y; return y; };
+  }
+  const dcBlock = () => { let x1 = 0, y1 = 0; const r = 1 - TAU * 10 / sr; return x => { const y = x - x1 + r * y1; x1 = x; y1 = y; return y; }; };
+
+  // ---- noise: 16 bit LFSR clocked at 12 kHz (bits 6 and 14, XNOR) ----
+  let lfsr = 0, noisePh = 0, noise = 1, noiseClk = 0;
+  const NOISE_HZ = 12000;
+  function stepNoise() {
+    noisePh += NOISE_HZ / sr;
+    while (noisePh >= 1) {
+      noisePh -= 1;
+      const fb = (~(((lfsr >> 6) ^ (lfsr >> 14)) & 1)) & 1;
+      lfsr = ((lfsr << 1) | fb) & 0xFFFF;
+      noise = fb ? 0.5 : -0.5;          // MAME: +/- amplitude/2
+      noiseClk++;
+    }
+  }
+
+  // ---- thrust: gated noise, RC 72 Hz, band-pass 89.5 Hz, low-pass 160 Hz ----
+  const thrLP1 = onePole(72), thrBP = bandpass(89.5, 7.6), thrLP2 = onePole(160);   // band-pass damping 1/7.6
+  let thrEnv = 0;
+
+  // ---- explosion: noise sampled at 12 kHz / divider, times volume, RC 52 Hz ----
+  let expHold = 0, expLastClk = 0;
+  const expLP = onePole(52);
+  const EXP_DIV = { 0x00: 12, 0x40: 6, 0x80: 3, 0xC0: 5 };
+
+  // ---- thump: 555 square wave, two pitches, RC 482 Hz ----
+  let thumpPh = 0;
+  const thumpLP = onePole(482), thumpDC = dcBlock();
+  const thumpHz = d => (d & 4 ? 68 : 40);    // estimate (see header)
+
+  // ---- saucer: triangle VCO warbled by a slow triangle ----
+  let sPh = 0, sLfo = 0;
+  const tri = p => (p < 0.5 ? 4 * p - 1 : 3 - 4 * p);
+
+  // ---- fire sounds: falling square-wave sweep with decaying level ----
+  function firer(f0, f1, decay) {
+    let on = false, t = 0, ph = 0;
+    return gate => {
+      if (gate && !on) { t = 0; ph = 0; }
+      on = gate;
+      if (!on) return 0;
+      t += 1 / sr;
+      const f = Math.max(f1, f0 - (f0 - f1) / 0.28 * t);
+      ph = (ph + f / sr) % 1;
+      const duty = Math.min(0.95, (4500 / f + 67) / 100);
+      const amp = 7 + decay.a * Math.exp(-t / decay.tau);
+      return (ph < duty ? 0.5 : -0.5) * amp;
+    };
+  }
+  const shipFire = firer(820, 110, { a: 46, tau: 0.081 });
+  const saucFire = firer(830, 630, { a: 42.5, tau: 0.3 });
+  const fireDC = dcBlock();
+
+  let lifePh = 0;
+  const outDC = dcBlock();
+  const MIX = 2 * 1.4 / 1910.6;               // MAME output normalisation (65534/1910.6, route gain 1.4)
+  let master = 1;
+
+  function sample() {
+    stepNoise();
+    // thrust
+    thrEnv += ((regs.SHPSND & 0x80 ? 1 : 0) - thrEnv) * 0.01;
+    let out = thrLP2(thrBP(thrLP1(noise * thrEnv * 600 * 7.6)));
+    // explosion
+    const div = EXP_DIV[regs.EXPSND & 0xC0];
+    if (noiseClk - expLastClk >= div) { expLastClk = noiseClk; expHold = noise; }
+    out += expLP(expHold * ((regs.EXPSND & 0x3C) >> 2) * 1000 / 15);
+    // thump
+    if (regs.THUMP & 0x10) {
+      thumpPh = (thumpPh + thumpHz(regs.THUMP & 0x0F) / sr) % 1;
+      out += thumpDC(thumpLP(thumpPh < 0.5 ? 0.5 : -0.5)) * 131.6;
+    } else out += thumpDC(thumpLP(0)) * 131.6;
+    // saucer
+    if (regs.SCRSND & 0x80) {
+      const big = regs.SCRSEL & 0x80 ? 1 : 0;
+      sLfo = (sLfo + (big ? 5.75 : 8.25) / sr) % 1;
+      const f = 750 - 250 * big + 460 + 460 * tri(sLfo);
+      sPh = (sPh + f / sr) % 1;
+      out += tri(sPh) * 0.5 * 76.1;
+    }
+    // fire
+    out += fireDC(shipFire(!!(regs.SHPFIR & 0x80)) + saucFire(!!(regs.SCRFIR & 0x80)));
+    // extra life tone: 3 kHz
+    if (regs.TONE & 0x80) { lifePh = (lifePh + 3000 / sr) % 1; out += (lifePh < 0.5 ? 0.5 : -0.5) * 100; }
+    const v = outDC(out * MIX * master);
+    return v > 1 ? 1 : v < -1 ? -1 : v;
+  }
+
+  return {
+    regs,
+    set volume(v) { master = v; },
+    render(buf) { for (let i = 0; i < buf.length; i++) buf[i] = sample(); },
+  };
+}
+
+// =====================================================================
+//  FRONT END - vector display, controls, audio, settings
+// =====================================================================
+
+// ---- Vector generator: builds a list of beam segments for one frame ----
+function createVG() {
+  let shown = [], next = [], x = 0, y = 0, s = 0;
+  return {
+    begin() { next = []; x = 0; y = 0; s = 0; },
+    labs(nx, ny, ns) { x = nx; y = ny; s = ns; },               // LABS: absolute position + scale
+    vec(dx, dy, z) {                                             // VCTR: relative, scaled by 2^scale
+      const k = Math.pow(2, s), nx = x + dx * k, ny = y + dy * k;
+      if (z > 0) next.push(x, y, nx, ny, z);
+      x = nx; y = ny;
+    },
+    dot(z) { if (z > 0) next.push(x, y, x, y, z); },
+    shape(arr, zAdd = 0, mx = 1, my = 1) {                       // JSRL / copied picture
+      for (const v of arr) this.vec(v[0] * mx, v[1] * my, zAdd ? (v[2] + zAdd) & 15 : v[2]);
+    },
+    end() { shown = next; },
+    abort() { /* incomplete list: keep showing the previous frame */ },
+    get segs() { return shown; },
+  };
+}
+
+// ---- Settings ----
+const DEFAULT_OPT = { lang: 0, lives: 3, coinage: 2, glow: true, volume: 0.8 };
+function loadOpt() {
+  try { return Object.assign({}, DEFAULT_OPT, JSON.parse(localStorage.getItem('asteroids79.opt') || '{}')); }
+  catch (e) { return Object.assign({}, DEFAULT_OPT); }
+}
+function saveOpt(o) { try { localStorage.setItem('asteroids79.opt', JSON.stringify(o)); } catch (e) { /* ignore */ } }
+
+const sw = { fire: false, hyp: false, thrust: false, rotl: false, rotr: false, start1: false, start2: false };
+const snd = { EXPSND: 0, THUMP: 0, SCRSND: 0, SCRSEL: 0, SCRFIR: 0, SHPSND: 0, SHPFIR: 0, TONE: 0 };
+const opt = loadOpt();
+const V = createVG();
+
+const io = {
+  sw, snd, opt, V,
+  loadHighScores(zp, HS, IN) {
+    try {
+      const d = JSON.parse(localStorage.getItem('asteroids79.hiscores') || 'null');
+      if (d && d.hs && d.in) { d.hs.forEach((v, i) => { zp[HS + i] = v & 255; }); d.in.forEach((v, i) => { zp[IN + i] = v & 255; }); }
+    } catch (e) { /* ignore */ }
+  },
+};
+const M = createMachine(io);
+
+let lastSaved = '';
+function saveHighScores() {
+  const zp = M.zp, c = M.debug.consts;
+  if (!((zp[0x31] & zp[0x32]) & 0x80)) return;           // still entering initials
+  const d = JSON.stringify({ hs: Array.from(zp.slice(c.HSCORE, c.HSCORE + 20)), in: Array.from(zp.slice(c.INITL, c.INITL + 30)) });
+  if (d !== lastSaved) { lastSaved = d; try { localStorage.setItem('asteroids79.hiscores', d); } catch (e) { /* ignore */ } }
+}
+
+// ---- Display ----
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
+const sharp = document.createElement('canvas');
+const sctx = sharp.getContext('2d');
+// Visible part of the vector generator's 1024x1024 space (same size as MAME's window)
+const VIEW_X = -10, VIEW_W = 1044, VIEW_Y = 118, VIEW_H = 788;
+let W = 0, H = 0;
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  let w = ww, h = Math.round(ww * VIEW_H / VIEW_W);
+  if (h > wh) { h = wh; w = Math.round(wh * VIEW_W / VIEW_H); }
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+  W = canvas.width = sharp.width = Math.round(w * dpr);
+  H = canvas.height = sharp.height = Math.round(h * dpr);
+}
+window.addEventListener('resize', resize);
+resize();
+
+ctx.filter = 'blur(2px)';
+const canBlur = ctx.filter === 'blur(2px)';
+ctx.filter = 'none';
+
+const BRIGHT = Array.from({ length: 16 }, (_, z) => Math.min(1, Math.pow(z / 15, 0.6) * 1.05));
+function render() {
+  const segs = V.segs, kx = W / VIEW_W, ky = H / VIEW_H, top = VIEW_Y + VIEW_H;
+  sctx.globalCompositeOperation = 'source-over';
+  sctx.fillStyle = '#000';
+  sctx.fillRect(0, 0, W, H);
+  sctx.save();
+  sctx.beginPath();                              // the DVG only draws inside 0..1023
+  sctx.rect((0 - VIEW_X) * kx, (top - 1024) * ky, 1024 * kx, 1024 * ky);
+  sctx.clip();
+  sctx.lineCap = 'round';
+  sctx.lineWidth = Math.max(1, kx * 1.6);
+  sctx.strokeStyle = '#eef4ff';
+  sctx.fillStyle = '#eef4ff';
+  for (let z = 1; z < 16; z++) {                 // one path per brightness level
+    sctx.globalAlpha = BRIGHT[z];
+    sctx.beginPath();
+    let any = false;
+    for (let i = 0; i < segs.length; i += 5) {
+      if (segs[i + 4] !== z) continue;
+      const x0 = (segs[i] - VIEW_X) * kx, y0 = (top - segs[i + 1]) * ky, x1 = (segs[i + 2] - VIEW_X) * kx, y1 = (top - segs[i + 3]) * ky;
+      if (x0 === x1 && y0 === y1) { sctx.moveTo(x0 + 0.01, y0); sctx.arc(x0, y0, sctx.lineWidth * 0.9, 0, Math.PI * 2); }
+      else { sctx.moveTo(x0, y0); sctx.lineTo(x1, y1); }
+      any = true;
+    }
+    if (any) { sctx.stroke(); sctx.fill(); }
+  }
+  sctx.restore();
+  sctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  if (opt.glow && canBlur) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.filter = `blur(${Math.max(2, Math.round(kx * 5))}px)`;
+    ctx.globalAlpha = 0.9;
+    ctx.drawImage(sharp, 0, 0);
+    ctx.filter = 'none';
+    ctx.globalAlpha = 1;
+  }
+  ctx.drawImage(sharp, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+// ---- Controls ----
+const keys = new Set();
+const tapped = new Set();          // keys pressed since the last frame (so quick taps aren't missed)
+const KEYMAP = {
+  rotl: ['ArrowLeft', 'KeyA'], rotr: ['ArrowRight', 'KeyD'], thrust: ['ArrowUp', 'KeyW'],
+  fire: ['Space', 'ControlLeft', 'ControlRight', 'KeyK'], hyp: ['ArrowDown', 'KeyS', 'ShiftLeft', 'ShiftRight', 'KeyL'],
+  start1: ['Digit1', 'Enter', 'NumpadEnter'], start2: ['Digit2'],
+};
+const COIN_KEYS = ['Digit5', 'KeyC'];
+let coinWas = false;
+window.addEventListener('keydown', e => {
+  if (e.code === 'KeyO') { toggleOptions(); e.preventDefault(); return; }
+  if (e.code === 'KeyP' || e.code === 'Escape') { if (!optionsOpen()) togglePause(); e.preventDefault(); return; }
+  if (e.code === 'KeyM') { opt.volume = opt.volume > 0 ? 0 : 0.8; saveOpt(opt); applyVolume(); syncOptionsForm(); return; }
+  if (optionsOpen()) return;
+  keys.add(e.code);
+  tapped.add(e.code);
+  powerOnIfNeeded();
+  if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
+});
+window.addEventListener('keyup', e => keys.delete(e.code));
+window.addEventListener('blur', () => { keys.clear(); tapped.clear(); });
+
+function readInputs() {
+  const down = c => keys.has(c) || tapped.has(c);
+  const k = name => KEYMAP[name].some(down);
+  const coinHeld = COIN_KEYS.some(c => keys.has(c)), coinTap = COIN_KEYS.some(c => tapped.has(c));
+  let padCoin = false;
+  const pad = { fire: false, hyp: false, thrust: false, rotl: false, rotr: false, start1: false, start2: false };
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const g of pads) {
+    if (!g || !g.connected) continue;
+    const b = i => !!(g.buttons[i] && g.buttons[i].pressed);
+    const ax = g.axes[0] || 0, ay = g.axes[1] || 0;
+    pad.fire = pad.fire || b(0) || b(2);
+    pad.thrust = pad.thrust || b(1) || b(7) || b(5) || b(12) || ay < -0.6;
+    pad.hyp = pad.hyp || b(3) || b(4) || b(6) || b(13) || ay > 0.75;
+    pad.rotl = pad.rotl || b(14) || ax < -0.4;
+    pad.rotr = pad.rotr || b(15) || ax > 0.4;
+    pad.start1 = pad.start1 || b(9);
+    pad.start2 = pad.start2 || b(10) || b(11);
+    padCoin = padCoin || b(8);
+    if (b(9) || b(0)) powerOnIfNeeded();
+  }
+  for (const n of Object.keys(sw)) sw[n] = k(n) || pad[n];
+  if ((coinHeld || coinTap || padCoin) && !coinWas) M.coin();
+  coinWas = coinHeld || padCoin;
+  tapped.clear();
+}
+
+// ---- Audio ----
+let audio = null;
+async function startAudio() {
+  if (audio) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  const ac = new AC();
+  audio = { ac, post: null };
+  try {
+    const src = makeSynth.toString() + `
+      class P extends AudioWorkletProcessor {
+        constructor() { super(); this.s = makeSynth(sampleRate);
+          this.port.onmessage = e => { if (e.data.regs) Object.assign(this.s.regs, e.data.regs); if (e.data.vol !== undefined) this.s.volume = e.data.vol; }; }
+        process(i, o) { this.s.render(o[0][0]); for (let c = 1; c < o[0].length; c++) o[0][c].set(o[0][0]); return true; }
+      }
+      registerProcessor('asteroids-sound', P);`;
+    const url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+    await ac.audioWorklet.addModule(url);
+    const node = new AudioWorkletNode(ac, 'asteroids-sound', { outputChannelCount: [1] });
+    node.connect(ac.destination);
+    audio.post = m => node.port.postMessage(m);
+  } catch (e) {
+    // fallback: ScriptProcessor
+    const s = makeSynth(ac.sampleRate);
+    const node = ac.createScriptProcessor(1024, 0, 1);
+    node.onaudioprocess = ev => s.render(ev.outputBuffer.getChannelData(0));
+    node.connect(ac.destination);
+    audio.post = m => { if (m.regs) Object.assign(s.regs, m.regs); if (m.vol !== undefined) s.volume = m.vol; };
+  }
+  applyVolume();
+  if (ac.state === 'suspended') ac.resume();
+}
+function applyVolume() { if (audio && audio.post) audio.post({ vol: opt.volume }); }
+function pushSound() {
+  if (!audio || !audio.post) return;
+  audio.post({ regs: paused ? { EXPSND: 0, THUMP: 0, SCRSND: 0, SCRFIR: 0, SHPSND: 0, SHPFIR: 0, TONE: 0 } : Object.assign({}, snd) });
+}
+
+// ---- Power on / pause / options ----
+let powered = false, paused = false;
+const splash = document.getElementById('splash');
+const pauseEl = document.getElementById('paused');
+function powerOnIfNeeded() {
+  startAudio();
+  if (audio && audio.ac.state === 'suspended') audio.ac.resume();
+  if (powered) return;
+  powered = true;
+  splash.classList.add('hidden');
+  M.powerOn();
+}
+splash.addEventListener('click', powerOnIfNeeded);
+window.addEventListener('pointerdown', () => { if (powered) powerOnIfNeeded(); });
+function togglePause() { if (!powered) return; paused = !paused; pauseEl.classList.toggle('hidden', !paused); pushSound(); }
+
+const optEl = document.getElementById('options');
+const optionsOpen = () => !optEl.classList.contains('hidden');
+function syncOptionsForm() {
+  for (const el of optEl.querySelectorAll('[data-opt]')) {
+    const k = el.dataset.opt;
+    if (el.type === 'checkbox') el.checked = !!opt[k];
+    else if (el.type === 'range') el.value = opt[k];
+    else el.value = String(opt[k]);
+  }
+}
+function toggleOptions() {
+  const open = !optionsOpen();
+  optEl.classList.toggle('hidden', !open);
+  if (open) { syncOptionsForm(); keys.clear(); }
+  if (powered) { paused = open; pauseEl.classList.add('hidden'); pushSound(); }
+}
+optEl.addEventListener('input', e => {
+  const el = e.target, k = el.dataset.opt;
+  if (!k) return;
+  opt[k] = el.type === 'checkbox' ? el.checked : el.type === 'range' ? parseFloat(el.value) : parseInt(el.value, 10);
+  saveOpt(opt);
+  if (k === 'coinage' && powered) M.setCoinMode();
+  if (k === 'volume') applyVolume();
+});
+document.getElementById('opt-close').addEventListener('click', toggleOptions);
+document.getElementById('opt-reset').addEventListener('click', () => {
+  if (!confirm('Clear the high score table?')) return;
+  try { localStorage.removeItem('asteroids79.hiscores'); } catch (e) { /* ignore */ }
+  lastSaved = '';
+  if (powered) M.powerOn();
+});
+document.getElementById('opt-help').addEventListener('click', () => document.getElementById('help').classList.toggle('hidden'));
+
+// ---- Main loop: the game runs at the board's 61.5 Hz frame rate ----
+const FRAME_MS = 1000 / (12096000 / 4096 / 12 / 4);
+let acc = 0, last = performance.now();
+function loop(now) {
+  let dt = now - last; last = now;
+  if (dt > 250) dt = FRAME_MS;              // tab was hidden: don't fast-forward
+  if (powered && !paused) {
+    acc += dt;
+    while (acc >= FRAME_MS) {
+      acc -= FRAME_MS;
+      readInputs();
+      M.frame();
+    }
+    pushSound();
+    if ((M.zp[0x5B] & 63) === 0) saveHighScores();
+  } else {
+    if (powered) readInputs();
+    acc = 0;
+  }
+  render();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>
